@@ -125,7 +125,7 @@ static bool fast_yuv422_to_jpeg(camera_fb_t *fb, uint8_t **out, size_t *out_len)
         cfg.height = fb->height;
         cfg.src_type = JPEG_PIXEL_FORMAT_YCbYCr;
         cfg.subsampling = JPEG_SUBSAMPLE_420;
-        cfg.quality = 75;
+        cfg.quality = 70;
         cfg.rotate = JPEG_ROTATE_0D;
         cfg.task_enable = true;
         cfg.hfm_task_priority = 13;
@@ -153,7 +153,7 @@ static bool fast_yuv422_to_jpeg(camera_fb_t *fb, uint8_t **out, size_t *out_len)
         }
         fast_jpeg_width = fb->width;
         fast_jpeg_height = fb->height;
-        log_i("esp_new_jpeg ready: %dx%d, block=%d, quality=75", 
+        log_i("esp_new_jpeg ready: %dx%d, block=%d, quality=70", 
               fast_jpeg_width, fast_jpeg_height, fast_jpeg_block_size);
     }
 

@@ -7,8 +7,8 @@
 - 摄像头：GC2145
 - Wi-Fi STA 热点名称：`nihao`
 - Wi-Fi 密码：`welcometohere`
-- 默认分辨率：VGA 640×480
-- JPEG 质量：75
+- 默认分辨率：HVGA 480×320
+- JPEG 质量：70
 - 图传协议：HTTP MJPEG
 - 编码器：Espressif `esp_new_jpeg` 1.0.0
 - 优化：ESP32-S3 SIMD、双核 JPEG、DRAM 分块、双帧缓冲、关闭 Wi-Fi 休眠
