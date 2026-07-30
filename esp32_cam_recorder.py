@@ -15,8 +15,7 @@ from tkinter import filedialog, messagebox, ttk
 
 
 MAX_AVI_BYTES = 3_800_000_000
-PREVIEW_BUFFER_SECONDS = 0.65
-PREVIEW_QUEUE_LIMIT = 120
+PREVIEW_BUFFER_SECONDS = 2.0
 
 
 def _chunk(tag, payload):
@@ -160,9 +159,10 @@ class RecorderApp:
         self.closing = False
         self.close_requested = False
         self.current_response = None
-        self.preview_frames = deque(maxlen=PREVIEW_QUEUE_LIMIT)
+        # No maxlen: a bounded deque silently discards old frames when full.
+        # The user prefers added latency over any preview frame dropping.
+        self.preview_frames = deque()
         self.preview_interval = 1.0 / 10.0
-        self.last_frame_arrival = None
         self.frame_condition = threading.Condition()
         self.output_dir = tk.StringVar(value=str(Path.home() / "Videos"))
         self.address = tk.StringVar(value="192.168.1.100")
@@ -194,7 +194,7 @@ class RecorderApp:
         ttk.Label(panel, textvariable=self.status, foreground="#075985").grid(row=4, column=0, columnspan=3, sticky="w")
         ttk.Label(
             panel,
-            text="预览先缓冲约 0.65 秒并匀速播放；录像直接封装 MJPEG，不二次编码。",
+            text="预览缓存约 2 秒且不抽帧，并按录像平均帧率匀速播放。",
             foreground="#555555"
         ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(10, 0))
         panel.columnconfigure(1, weight=1)
@@ -234,8 +234,8 @@ img{{display:block;width:100vw;height:100vh;object-fit:contain;background:#000}}
                     while not app.closing:
                         with app.frame_condition:
                             target_frames = max(
-                                4,
-                                min(30, round(PREVIEW_BUFFER_SECONDS / app.preview_interval)),
+                                8,
+                                min(120, round(PREVIEW_BUFFER_SECONDS / app.preview_interval)),
                             )
                             if not playback_started:
                                 app.frame_condition.wait_for(
@@ -256,13 +256,6 @@ img{{display:block;width:100vw;height:100vh;object-fit:contain;background:#000}}
                                 continue
                             frame = app.preview_frames.popleft()
                             interval = app.preview_interval
-                            buffered = len(app.preview_frames)
-                            # Gently keep the buffer near its target without making
-                            # frame spacing visibly jump when Wi-Fi arrival times vary.
-                            if buffered > target_frames * 1.5:
-                                interval *= 0.98
-                            elif buffered < target_frames * 0.5:
-                                interval *= 1.02
                         if not frame:
                             continue
                         now = time.monotonic()
@@ -321,7 +314,6 @@ img{{display:block;width:100vw;height:100vh;object-fit:contain;background:#000}}
         with self.frame_condition:
             self.preview_frames.clear()
             self.preview_interval = 1.0 / 10.0
-            self.last_frame_arrival = None
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
         self.status.set(f"正在连接 {url} ...")
@@ -367,21 +359,22 @@ img{{display:block;width:100vw;height:100vh;object-fit:contain;background:#000}}
                             break
                         frame = bytes(buffer[start:end + 2])
                         del buffer[:end + 2]
-                        arrived = time.monotonic()
-                        with self.frame_condition:
-                            if self.last_frame_arrival is not None:
-                                sample = arrived - self.last_frame_arrival
-                                if 0.015 <= sample <= 1.0:
-                                    self.preview_interval = (
-                                        self.preview_interval * 0.92 + sample * 0.08
-                                    )
-                            self.last_frame_arrival = arrived
-                            self.preview_frames.append(frame)
-                            self.frame_condition.notify_all()
                         if writer is None:
                             width, height = jpeg_dimensions(frame)
                             writer = MjpegAviWriter(self.working_file, width, height)
                         writer.add_frame(frame)
+                        # Network reads often contain several JPEGs at once, so
+                        # per-frame arrival timestamps are not a reliable clock.
+                        # Use the same cumulative average rate as the AVI writer;
+                        # this is why the saved video already plays smoothly.
+                        elapsed = writer.elapsed
+                        with self.frame_condition:
+                            if elapsed >= 0.5 and writer.frames >= 4:
+                                measured_interval = elapsed / writer.frames
+                                if 1.0 / 60.0 <= measured_interval <= 1.0:
+                                    self.preview_interval = measured_interval
+                            self.preview_frames.append(frame)
+                            self.frame_condition.notify_all()
                         now = time.monotonic()
                         if now - last_update >= 0.5:
                             fps = writer.frames / writer.elapsed
