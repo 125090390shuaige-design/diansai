@@ -38,6 +38,8 @@ $config = [regex]::Replace($config, '(?m)^file_path0\s*=.*$', "file_path0 = $fir
 $config = [regex]::Replace($config, '(?m)^file_flag0\s*=.*$', 'file_flag0 = True')
 $config = [regex]::Replace($config, '(?m)^file_offset0\s*=.*$', 'file_offset0 = 0x0')
 $config = [regex]::Replace($config, '(?m)^default_path\s*=.*$', "default_path = $stageRoot")
+$config = [regex]::Replace($config, '(?m)^spispeed\s*=.*$', 'spispeed = 3')
+$config = [regex]::Replace($config, '(?m)^spimode\s*=.*$', 'spimode = 2')
 $config = [regex]::Replace($config, '(?m)^verify\s*=.*$', 'verify = True')
 Set-Content -LiteralPath $configPath -Value $config -Encoding ASCII
 
