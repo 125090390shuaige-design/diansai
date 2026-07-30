@@ -24,6 +24,9 @@
 - `README_烧录说明.txt`：烧录和连接步骤。
 - `版本信息.txt`：当前固件参数和 SHA-256。
 - `给AI的环境安装提示词.md`：在其他 Windows 电脑上交给 AI 执行的自动部署与验收提示词。
+- `flash_download_tool_3.9.7.exe` 与 `configure/`：ESP32-S3 固件烧录工具及配置。
+- `UartAssist.exe`：查看115200波特率串口日志和摄像头IP。
+- `wifi设置.txt`：当前手机热点名称和密码。
 
 ## 烧录
 
