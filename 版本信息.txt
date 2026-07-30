@@ -1,0 +1,23 @@
+固件：CameraWebServer_STA_0x0.bin
+用途：ESP32S3-Cam 连接手机热点，低延迟网页图传
+
+热点名称：nihao
+热点密码：welcometohere
+
+摄像头：GC2145（无原生 JPEG）
+采集格式：YUV422
+默认分辨率：HVGA 480x320
+JPEG：Espressif esp_new_jpeg 1.0.0，质量 70，YUV420 色度采样
+性能优化：ESP32-S3 SIMD、双核编码、DRAM 分块编码、双帧缓冲、只取最新帧、关闭 Wi-Fi 休眠
+传输协议：标准 HTTP MJPEG，兼容浏览器和“电脑录像工具”
+人脸检测/识别：关闭，避免占用视频处理时间
+
+平台：ESP32 Arduino Core 2.0.11
+开发板：ESP32S3 Dev Module
+Flash：8MB / QIO 80MHz
+PSRAM：OPI PSRAM
+分区：Huge APP，自定义 partitions.csv
+烧录地址：0x0（单文件已合并 bootloader、partition table、boot_app0 和 app）
+SHA-256：F9BBA5B1959067AF9D0155D1B734396F730B7923269EE8DA63AB9E276A64DC59
+
+注意：本版本修改了固件，必须重新烧录才会生效。

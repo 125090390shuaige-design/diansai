@@ -1,0 +1,9 @@
+build/
+__pycache__/
+*.pyc
+*.recording
+*.avi
+*.mp4
+recorder_error.log
+active_recording_snapshot.*
+latest_orphan_snapshot.*
