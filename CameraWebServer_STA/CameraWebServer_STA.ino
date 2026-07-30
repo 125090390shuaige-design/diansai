@@ -92,7 +92,7 @@ void setup() {
    */
   // GC2145 has no native JPEG output. YUV422 avoids the RGB-to-YUV conversion
   // that dominated the old software JPEG path. esp_new_jpeg encodes it below.
-  config.frame_size = FRAMESIZE_HVGA;
+  config.frame_size = FRAMESIZE_VGA;
   config.pixel_format = PIXFORMAT_YUV422;
   config.grab_mode = CAMERA_GRAB_LATEST;
   config.fb_location = CAMERA_FB_IN_PSRAM;

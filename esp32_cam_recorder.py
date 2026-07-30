@@ -15,7 +15,7 @@ from tkinter import filedialog, messagebox, ttk
 
 
 MAX_AVI_BYTES = 3_800_000_000
-PREVIEW_BUFFER_SECONDS = 2.0
+PREVIEW_BUFFER_SECONDS = 4.0
 
 
 def _chunk(tag, payload):
@@ -194,7 +194,7 @@ class RecorderApp:
         ttk.Label(panel, textvariable=self.status, foreground="#075985").grid(row=4, column=0, columnspan=3, sticky="w")
         ttk.Label(
             panel,
-            text="预览缓存约 2 秒且不抽帧，并按录像平均帧率匀速播放。",
+            text="预览缓存约 4 秒且不抽帧，并按录像平均帧率匀速播放。",
             foreground="#555555"
         ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(10, 0))
         panel.columnconfigure(1, weight=1)
