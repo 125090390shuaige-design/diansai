@@ -1,0 +1,33 @@
+ESP32S3-Cam 烧录配置说明
+========================
+
+需要的根目录文件：
+- flash_download_tool_3.9.7.exe
+- configure 文件夹
+- CameraWebServer_STA_0x0.bin
+
+操作步骤：
+1. 双击根目录的 flash_download_tool_3.9.7.exe。
+2. ChipType 选择 ESP32-S3。
+3. WorkMode 选择 Develop。
+4. 固件第一行选择根目录的 CameraWebServer_STA_0x0.bin。
+5. 必须勾选固件行左侧复选框。
+6. 固件地址必须填写 0x0。
+7. SPI SPEED 选择 80MHz。
+8. SPI MODE 选择 DIO。
+9. 勾选 DoNotChgBin。
+10. COM选择设备管理器中开发板对应的串口；不同电脑端口号可能不同。
+11. BAUD建议先使用115200，稳定后可尝试更高速度。
+12. 先点击 ERASE；显示完成后再点击 START。
+13. 显示 FINISH 后按开发板 RESET。
+
+重要说明：
+- 右侧 DetectedInfo 中的 crystal: 40 MHz 是ESP32-S3主晶振，不是Flash SPI速度。
+- 最终BIN头已经写入 DIO 80MHz、8MB；DoNotChgBin用于防止烧录工具改写这些参数。
+- 如果固件行没有勾选，或者地址为空，工具即使显示FINISH也没有真正写入固件。
+- 仓库路径包含中文时，如果烧录工具不能自动载入BIN，请点击“...”重新手动选择根目录BIN。
+
+固件校验：
+SHA-256：561AEE1640ACBE2E30505281CE1F156E5387A5F1995C174A7AE7F92859295D8F
+
+只有BIN发生变化或设备尚未正确写入时才需要重新烧录。

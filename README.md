@@ -18,6 +18,8 @@
 ## 目录
 
 - `CameraWebServer_STA_0x0.bin`：可直接从地址 `0x0` 烧录的合并固件。
+- `flash_download_tool_3.9.7.exe` 与 `configure/`：根目录烧录程序和必要配置。
+- `烧录配置说明.txt`：烧录界面的完整参数和操作顺序。
 - `固件源码/CameraWebServer_STA/`：Arduino 固件源码。
 - `固件源码/libraries/ESP_New_JPEG/`：编译所需的预编译 JPEG 库。
 - `电脑录像工具/esp32_cam_recorder.py`：Windows 平滑预览和 MJPEG AVI 录像工具。
@@ -25,14 +27,12 @@
 - `文档/README_烧录说明.txt`：烧录和连接步骤。
 - `文档/版本信息.txt`：当前固件参数和 SHA-256。
 - `给AI的环境安装提示词.md`：在其他 Windows 电脑上交给 AI 执行的自动部署与验收提示词。
-- `烧录工具/flash_download_tool_3.9.7.exe` 与 `烧录工具/configure/`：ESP32-S3 固件烧录工具及配置。
-- `启动烧录工具.bat`：自动处理中文路径、校验BIN并预填勾选状态与地址 `0x0`。
 - `UartAssist.exe`：查看115200波特率串口日志和摄像头IP。
 - `wifi设置.txt`：当前手机热点名称和密码。
 
 ## 烧录
 
-推荐双击 `启动烧录工具.bat`，它会将工具暂存到纯英文目录并自动预填固件。然后：
+双击根目录的 `flash_download_tool_3.9.7.exe`，详细参数见 `烧录配置说明.txt`。关键设置：
 
 1. 芯片选择 ESP32-S3。
 2. 确认固件行左侧已经勾选，地址为 `0x0`。
