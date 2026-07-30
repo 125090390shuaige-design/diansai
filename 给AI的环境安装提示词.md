@@ -39,12 +39,12 @@ https://github.com/125090390shuaige-design/diansai.git
 - 安装后运行以下验证：
   - Python版本必须能正常输出。
   - 执行 import tkinter，必须成功。
-  - 对“电脑录像工具/esp32_cam_recorder.py”执行 python -m py_compile，必须无错误。
+  - 对“recorder/esp32_cam_recorder.py”执行 python -m py_compile，必须无错误。
 - 如果 Python 安装在其他目录，不要复制或伪造 python.exe；只修改“启动录像工具.bat”中的 PYTHON_EXE，使其指向真实解释器，并告诉我改了什么。
 
 3. 检查浏览器和 BAT
 - 优先检查 Microsoft Edge；脚本找不到 Edge 时可以使用系统默认浏览器。
-- 检查根目录的“启动录像工具.bat”存在，并且“电脑录像工具/esp32_cam_recorder.py”存在。
+- 检查根目录的“启动录像工具.bat”存在，并且“recorder/esp32_cam_recorder.py”存在。
 - 从终端运行一次 BAT，不能闪退；如果失败，保留完整错误信息并修复。
 - 不要为了修复环境而改变预览缓存、录像格式、摄像头分辨率、JPEG质量或Wi-Fi配置。
 

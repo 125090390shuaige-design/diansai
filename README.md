@@ -22,7 +22,7 @@
 - `烧录配置说明.txt`：烧录界面的完整参数和操作顺序。
 - `固件源码/CameraWebServer_STA/`：Arduino 固件源码。
 - `固件源码/libraries/ESP_New_JPEG/`：编译所需的预编译 JPEG 库。
-- `电脑录像工具/esp32_cam_recorder.py`：Windows 平滑预览和 MJPEG AVI 录像工具。
+- `recorder/esp32_cam_recorder.py`：Windows 平滑预览和 MJPEG AVI 录像工具。
 - `启动录像工具.bat`：录像工具启动入口。
 - `文档/README_烧录说明.txt`：烧录和连接步骤。
 - `文档/版本信息.txt`：当前固件参数和 SHA-256。
