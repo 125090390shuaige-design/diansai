@@ -25,17 +25,18 @@
 - `版本信息.txt`：当前固件参数和 SHA-256。
 - `给AI的环境安装提示词.md`：在其他 Windows 电脑上交给 AI 执行的自动部署与验收提示词。
 - `flash_download_tool_3.9.7.exe` 与 `configure/`：ESP32-S3 固件烧录工具及配置。
+- `启动烧录工具.bat`：自动处理中文路径、校验BIN并预填勾选状态与地址 `0x0`。
 - `UartAssist.exe`：查看115200波特率串口日志和摄像头IP。
 - `wifi设置.txt`：当前手机热点名称和密码。
 
 ## 烧录
 
-使用乐鑫 Flash Download Tool：
+推荐双击 `启动烧录工具.bat`，它会将工具暂存到纯英文目录并自动预填固件。然后：
 
 1. 芯片选择 ESP32-S3。
-2. 只选择 `CameraWebServer_STA_0x0.bin`。
-3. 地址填写 `0x0`，勾选 `DoNotChgBin`。
-4. 建议先擦除，再开始烧录。
+2. 确认固件行左侧已经勾选，地址为 `0x0`。
+3. 确认勾选 `DoNotChgBin`。
+4. 选择正确 COM 口，建议先擦除，再开始烧录。
 
 ## 电脑端使用
 
