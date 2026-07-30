@@ -1,9 +1,13 @@
+param(
+    [switch]$NoLaunch
+)
+
 $ErrorActionPreference = "Stop"
 
-$projectRoot = $PSScriptRoot
-$flashToolSource = Join-Path $projectRoot "flash_download_tool_3.9.7.exe"
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$flashToolSource = Join-Path $PSScriptRoot "flash_download_tool_3.9.7.exe"
 $firmwareSource = Join-Path $projectRoot "CameraWebServer_STA_0x0.bin"
-$configureSource = Join-Path $projectRoot "configure"
+$configureSource = Join-Path $PSScriptRoot "configure"
 
 foreach ($required in @($flashToolSource, $firmwareSource, $configureSource)) {
     if (-not (Test-Path -LiteralPath $required)) {
@@ -48,5 +52,6 @@ Write-Host "Flash tool directory: $stageRoot"
 Write-Host "The firmware row should be checked and its address should be 0x0."
 
 $flashTool = Join-Path $stageRoot "flash_download_tool_3.9.7.exe"
-Start-Process -FilePath $flashTool -WorkingDirectory $stageRoot
-
+if (-not $NoLaunch) {
+    Start-Process -FilePath $flashTool -WorkingDirectory $stageRoot
+}

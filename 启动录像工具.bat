@@ -2,7 +2,7 @@
 setlocal
 title ESP32S3-Cam Recorder Launcher
 set "PYTHON_EXE=C:\Program Files\Python314\python.exe"
-set "SCRIPT_FILE=%~dp0esp32_cam_recorder.py"
+set "SCRIPT_FILE=%~dp0电脑录像工具\esp32_cam_recorder.py"
 
 if not exist "%PYTHON_EXE%" goto no_python
 if not exist "%SCRIPT_FILE%" goto no_script

@@ -6,5 +6,6 @@ __pycache__/
 *.mp4
 recorder_error.log
 logs/
+dl_temp/
 active_recording_snapshot.*
 latest_orphan_snapshot.*
