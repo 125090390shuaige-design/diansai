@@ -56,7 +56,7 @@ https://github.com/125090390shuaige-design/diansai.git
 
 5. 检查固件
 - 计算 CameraWebServer_STA_0x0.bin 的 SHA-256，预期为：
-  29CEAC5CDD0E20CC4E3B7AEEAC6C5020A24DD35029A541041E9C46593DD594FF
+  0D774628B95BF87A2647155136C4FD346C96969AD4CA4C52D2B030C0A3664F71
 - 如果开发板已经烧录该版本，不要重复烧录。
 - 如果需要烧录，打开根目录的 flash_download_tool_3.9.7.exe，并参考根目录的“烧录配置说明.txt”。启动后检查：
   - ChipType：ESP32-S3

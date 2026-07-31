@@ -21,6 +21,11 @@
 #include "camera_index.h"
 #include "esp_jpeg_enc.h"
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
+#include "lwip/sockets.h"
+#include "lwip/tcp.h"
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_ARDUHAL_ESP_LOG)
 #include "esp32-hal-log.h"
@@ -189,6 +194,216 @@ static bool fast_yuv422_to_jpeg(camera_fb_t *fb, uint8_t **out, size_t *out_len)
     *out = fast_jpeg_output;
     *out_len = (size_t)encoded_size;
     return true;
+}
+
+// Streaming is split into three independent stages:
+//   camera capture -> JPEG encode -> HTTP sender(s)
+// Encoded frames live in a variable-length PSRAM ring. A slow TCP client can
+// therefore consume buffered frames without blocking capture or JPEG encode.
+#define PIPELINE_RING_BYTES (3U * 1024U * 1024U)
+#define PIPELINE_RING_MIN_BYTES (1U * 1024U * 1024U)
+#define PIPELINE_FRAME_SLOTS 192
+#define PIPELINE_CLIENT_FRAME_CAPACITY (320U * 240U * 2U + 65536U)
+
+typedef struct {
+    uint64_t sequence;
+    size_t offset;
+    size_t length;
+    struct timeval timestamp;
+} pipeline_frame_t;
+
+static QueueHandle_t pipeline_capture_queue = NULL;
+static SemaphoreHandle_t pipeline_ring_mutex = NULL;
+static uint8_t *pipeline_ring_data = NULL;
+static size_t pipeline_ring_capacity = 0;
+static size_t pipeline_ring_used = 0;
+static size_t pipeline_ring_write_pos = 0;
+static pipeline_frame_t pipeline_frames[PIPELINE_FRAME_SLOTS];
+static size_t pipeline_frame_head = 0;
+static size_t pipeline_frame_count = 0;
+static uint64_t pipeline_next_sequence = 1;
+static bool pipeline_started = false;
+
+static void pipeline_ring_evict_oldest_locked()
+{
+    if (!pipeline_frame_count) {
+        return;
+    }
+    pipeline_ring_used -= pipeline_frames[pipeline_frame_head].length;
+    pipeline_frame_head = (pipeline_frame_head + 1) % PIPELINE_FRAME_SLOTS;
+    pipeline_frame_count--;
+}
+
+static bool pipeline_ring_push(const uint8_t *jpeg, size_t length, const struct timeval *timestamp)
+{
+    if (!jpeg || !length || length > pipeline_ring_capacity || !pipeline_ring_mutex) {
+        return false;
+    }
+    if (xSemaphoreTake(pipeline_ring_mutex, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+
+    while (pipeline_frame_count &&
+           (pipeline_frame_count >= PIPELINE_FRAME_SLOTS ||
+            pipeline_ring_capacity - pipeline_ring_used < length)) {
+        pipeline_ring_evict_oldest_locked();
+    }
+
+    size_t first = length;
+    if (pipeline_ring_write_pos + first > pipeline_ring_capacity) {
+        first = pipeline_ring_capacity - pipeline_ring_write_pos;
+    }
+    memcpy(pipeline_ring_data + pipeline_ring_write_pos, jpeg, first);
+    if (first < length) {
+        memcpy(pipeline_ring_data, jpeg + first, length - first);
+    }
+
+    size_t tail = (pipeline_frame_head + pipeline_frame_count) % PIPELINE_FRAME_SLOTS;
+    pipeline_frames[tail].sequence = pipeline_next_sequence++;
+    pipeline_frames[tail].offset = pipeline_ring_write_pos;
+    pipeline_frames[tail].length = length;
+    pipeline_frames[tail].timestamp = *timestamp;
+    pipeline_frame_count++;
+    pipeline_ring_used += length;
+    pipeline_ring_write_pos = (pipeline_ring_write_pos + length) % pipeline_ring_capacity;
+    xSemaphoreGive(pipeline_ring_mutex);
+    return true;
+}
+
+// Copies one complete frame while holding the mutex only for the PSRAM copy.
+// wanted_sequence == 0 starts at the newest available frame. If a client fell
+// behind far enough to be overwritten, it resumes at the oldest retained one.
+static bool pipeline_ring_read(uint64_t wanted_sequence, uint8_t *destination,
+                               size_t destination_capacity, pipeline_frame_t *result)
+{
+    if (!destination || !result || !pipeline_ring_mutex ||
+        xSemaphoreTake(pipeline_ring_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return false;
+    }
+    if (!pipeline_frame_count) {
+        xSemaphoreGive(pipeline_ring_mutex);
+        return false;
+    }
+
+    size_t selected = pipeline_frame_count - 1;
+    if (wanted_sequence) {
+        size_t newest_index = (pipeline_frame_head + pipeline_frame_count - 1) % PIPELINE_FRAME_SLOTS;
+        if (wanted_sequence > pipeline_frames[newest_index].sequence) {
+            xSemaphoreGive(pipeline_ring_mutex);
+            return false;
+        }
+        selected = 0; // Also handles a client that fell behind the oldest frame.
+        if (wanted_sequence > pipeline_frames[pipeline_frame_head].sequence) {
+            for (size_t i = 1; i < pipeline_frame_count; ++i) {
+                size_t candidate = (pipeline_frame_head + i) % PIPELINE_FRAME_SLOTS;
+                if (pipeline_frames[candidate].sequence >= wanted_sequence) {
+                    selected = i;
+                    break;
+                }
+            }
+        }
+    }
+    size_t index = (pipeline_frame_head + selected) % PIPELINE_FRAME_SLOTS;
+    pipeline_frame_t frame = pipeline_frames[index];
+    if (frame.length > destination_capacity) {
+        xSemaphoreGive(pipeline_ring_mutex);
+        return false;
+    }
+
+    size_t first = frame.length;
+    if (frame.offset + first > pipeline_ring_capacity) {
+        first = pipeline_ring_capacity - frame.offset;
+    }
+    memcpy(destination, pipeline_ring_data + frame.offset, first);
+    if (first < frame.length) {
+        memcpy(destination + first, pipeline_ring_data, frame.length - first);
+    }
+    *result = frame;
+    xSemaphoreGive(pipeline_ring_mutex);
+    return true;
+}
+
+static void pipeline_capture_task(void *parameter)
+{
+    (void)parameter;
+    while (true) {
+        camera_fb_t *fb = esp_camera_fb_get();
+        if (!fb) {
+            log_e("Pipeline camera capture failed");
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        // Blocking here is intentional: it preserves every captured frame and
+        // only couples capture to encode, never to network transmission.
+        if (xQueueSend(pipeline_capture_queue, &fb, portMAX_DELAY) != pdTRUE) {
+            esp_camera_fb_return(fb);
+        }
+    }
+}
+
+static void pipeline_encode_task(void *parameter)
+{
+    (void)parameter;
+    while (true) {
+        camera_fb_t *fb = NULL;
+        if (xQueueReceive(pipeline_capture_queue, &fb, portMAX_DELAY) != pdTRUE || !fb) {
+            continue;
+        }
+        uint8_t *jpeg = NULL;
+        size_t jpeg_length = 0;
+        bool must_free_jpeg = false;
+        bool ok = false;
+        if (fb->format == PIXFORMAT_JPEG) {
+            jpeg = fb->buf;
+            jpeg_length = fb->len;
+            ok = true;
+        } else if (fb->format == PIXFORMAT_YUV422) {
+            ok = fast_yuv422_to_jpeg(fb, &jpeg, &jpeg_length);
+        } else {
+            ok = frame2jpg(fb, 60, &jpeg, &jpeg_length);
+            must_free_jpeg = ok;
+        }
+
+        if (ok && !pipeline_ring_push(jpeg, jpeg_length, &fb->timestamp)) {
+            log_e("Pipeline ring rejected JPEG frame (%u bytes)", (unsigned)jpeg_length);
+        }
+        esp_camera_fb_return(fb);
+        if (jpeg && must_free_jpeg) {
+            free(jpeg);
+        }
+    }
+}
+
+static bool start_stream_pipeline()
+{
+    if (pipeline_started) {
+        return true;
+    }
+    pipeline_ring_mutex = xSemaphoreCreateMutex();
+    pipeline_capture_queue = xQueueCreate(2, sizeof(camera_fb_t *));
+    size_t requested = PIPELINE_RING_BYTES;
+    while (requested >= PIPELINE_RING_MIN_BYTES && !pipeline_ring_data) {
+        pipeline_ring_data = (uint8_t *)heap_caps_malloc(
+            requested, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!pipeline_ring_data) {
+            requested -= 512U * 1024U;
+        }
+    }
+    if (!pipeline_ring_mutex || !pipeline_capture_queue || !pipeline_ring_data) {
+        log_e("Unable to allocate streaming pipeline");
+        return false;
+    }
+    pipeline_ring_capacity = requested;
+
+    BaseType_t capture_ok = xTaskCreatePinnedToCore(
+        pipeline_capture_task, "camera_capture", 4096, NULL, 11, NULL, 1);
+    BaseType_t encode_ok = xTaskCreatePinnedToCore(
+        pipeline_encode_task, "jpeg_encode", 6144, NULL, 10, NULL, 0);
+    pipeline_started = capture_ok == pdPASS && encode_ok == pdPASS;
+    log_i("Three-stage pipeline: %s, PSRAM ring=%u bytes",
+          pipeline_started ? "ready" : "task creation failed",
+          (unsigned)pipeline_ring_capacity);
+    return pipeline_started;
 }
 
 #define PART_BOUNDARY "123456789000000000000987654321"
@@ -907,6 +1122,77 @@ static esp_err_t stream_handler(httpd_req_t *req)
     return res;
 }
 
+static esp_err_t pipeline_stream_handler(httpd_req_t *req)
+{
+    if (!pipeline_started) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Streaming pipeline is unavailable", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    esp_err_t res = httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
+    if (res != ESP_OK) {
+        return res;
+    }
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "X-Framerate", "60");
+
+    int socket_fd = httpd_req_to_sockfd(req);
+    int enabled = 1;
+    setsockopt(socket_fd, IPPROTO_TCP, TCP_NODELAY, &enabled, sizeof(enabled));
+    int send_buffer = 64 * 1024;
+    setsockopt(socket_fd, SOL_SOCKET, SO_SNDBUF, &send_buffer, sizeof(send_buffer));
+
+    uint8_t *client_frame = (uint8_t *)heap_caps_malloc(
+        PIPELINE_CLIENT_FRAME_CAPACITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!client_frame) {
+        client_frame = (uint8_t *)heap_caps_malloc(
+            PIPELINE_CLIENT_FRAME_CAPACITY, MALLOC_CAP_8BIT);
+    }
+    if (!client_frame) {
+        httpd_resp_send_500(req);
+        return ESP_ERR_NO_MEM;
+    }
+
+#if CONFIG_LED_ILLUMINATOR_ENABLED
+    isStreaming = true;
+    enable_led(true);
+#endif
+
+    uint64_t wanted_sequence = 0;
+    char part_buf[128];
+    while (res == ESP_OK) {
+        pipeline_frame_t frame;
+        if (!pipeline_ring_read(wanted_sequence, client_frame,
+                                PIPELINE_CLIENT_FRAME_CAPACITY, &frame)) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+        wanted_sequence = frame.sequence + 1;
+
+        res = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
+        if (res == ESP_OK) {
+            size_t header_length = snprintf(
+                part_buf, sizeof(part_buf), _STREAM_PART, (unsigned)frame.length,
+                (int)frame.timestamp.tv_sec, (int)frame.timestamp.tv_usec);
+            res = httpd_resp_send_chunk(req, part_buf, header_length);
+        }
+        if (res == ESP_OK) {
+            res = httpd_resp_send_chunk(req, (const char *)client_frame, frame.length);
+        }
+    }
+
+    heap_caps_free(client_frame);
+#if CONFIG_LED_ILLUMINATOR_ENABLED
+    isStreaming = false;
+    enable_led(false);
+#endif
+    log_i("Pipeline stream client disconnected");
+    return res;
+}
+
 static esp_err_t parse_get(httpd_req_t *req, char **obuf)
 {
     char *buf = NULL;
@@ -1317,6 +1603,7 @@ static esp_err_t index_handler(httpd_req_t *req)
 
 void startCameraServer()
 {
+    start_stream_pipeline();
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 16;
 
@@ -1375,7 +1662,7 @@ void startCameraServer()
     httpd_uri_t stream_uri = {
         .uri = "/stream",
         .method = HTTP_GET,
-        .handler = stream_handler,
+        .handler = pipeline_stream_handler,
         .user_ctx = NULL
 #ifdef CONFIG_HTTPD_WS_SUPPORT
         ,
