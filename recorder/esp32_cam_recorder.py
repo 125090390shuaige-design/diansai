@@ -169,6 +169,11 @@ class RecorderApp:
         self.closing = False
         self.close_requested = False
         self.current_response = None
+        self.record_lock = threading.Lock()
+        self.recording = False
+        self.writer = None
+        self.finalizer = None
+        self.last_saved_file = None
         # No maxlen: a bounded deque silently discards old frames when full.
         # The user prefers added latency over any preview frame dropping.
         self.preview_frames = deque()
@@ -178,37 +183,42 @@ class RecorderApp:
         self.frame_condition = threading.Condition()
         self.output_dir = tk.StringVar(value=str(Path.home() / "Videos"))
         self.address = tk.StringVar(value="192.168.1.100")
-        self.status = tk.StringVar(value="等待开始")
+        self.status = tk.StringVar(value="请先打开摄像头")
         self.current_file = None
         self.working_file = None
 
         root.title("ESP32S3-Cam 平滑预览与录像工具")
-        root.geometry("660x300")
+        root.geometry("660x350")
         root.resizable(False, False)
 
         panel = ttk.Frame(root, padding=16)
         panel.pack(fill="both", expand=True)
         ttk.Label(panel, text="摄像头 IP 或图传网址：").grid(row=0, column=0, sticky="w", pady=6)
         ttk.Entry(panel, textvariable=self.address, width=48).grid(row=0, column=1, sticky="ew", pady=6)
-        ttk.Button(panel, text="打开本地预览", command=self.open_preview).grid(row=0, column=2, padx=(8, 0))
+        self.camera_button = ttk.Button(panel, text="打开摄像头", command=self.open_camera)
+        self.camera_button.grid(row=0, column=2, padx=(8, 0))
 
         ttk.Label(panel, text="录像保存目录：").grid(row=1, column=0, sticky="w", pady=6)
         ttk.Entry(panel, textvariable=self.output_dir, width=48).grid(row=1, column=1, sticky="ew", pady=6)
         ttk.Button(panel, text="选择目录", command=self.choose_dir).grid(row=1, column=2, padx=(8, 0))
 
-        self.start_button = ttk.Button(panel, text="开始录像", command=self.start)
-        self.start_button.grid(row=2, column=0, pady=16, sticky="ew")
-        self.stop_button = ttk.Button(panel, text="停止并保存", command=self.stop, state="disabled")
-        self.stop_button.grid(row=2, column=1, pady=16, padx=8, sticky="ew")
-        ttk.Button(panel, text="打开录像目录", command=self.open_folder).grid(row=2, column=2, pady=16, sticky="ew")
+        self.preview_button = ttk.Button(panel, text="重新打开预览", command=self.open_preview, state="disabled")
+        self.preview_button.grid(row=2, column=0, pady=(16, 6), sticky="ew")
+        self.start_button = ttk.Button(panel, text="开始录制", command=self.start_recording, state="disabled")
+        self.start_button.grid(row=2, column=1, pady=(16, 6), padx=8, sticky="ew")
+        self.stop_button = ttk.Button(panel, text="停止并保存", command=self.stop_recording, state="disabled")
+        self.stop_button.grid(row=2, column=2, pady=(16, 6), sticky="ew")
+        ttk.Button(panel, text="打开录像目录", command=self.open_folder).grid(
+            row=3, column=0, columnspan=3, pady=(0, 10), sticky="ew"
+        )
 
-        ttk.Separator(panel).grid(row=3, column=0, columnspan=3, sticky="ew", pady=(2, 10))
-        ttk.Label(panel, textvariable=self.status, foreground="#075985").grid(row=4, column=0, columnspan=3, sticky="w")
+        ttk.Separator(panel).grid(row=4, column=0, columnspan=3, sticky="ew", pady=(2, 10))
+        ttk.Label(panel, textvariable=self.status, foreground="#075985").grid(row=5, column=0, columnspan=3, sticky="w")
         ttk.Label(
             panel,
-            text="预览缓存约 4 秒且不抽帧，并按录像平均帧率匀速播放。",
+            text="先打开摄像头进行预览，需要时再开始录制；两者共用同一路图传。",
             foreground="#555555"
-        ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(10, 0))
         panel.columnconfigure(1, weight=1)
         self.start_proxy()
         root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -331,7 +341,7 @@ img{{display:block;width:100vw;height:100vh;object-fit:contain;background:#000}}
 
     def open_preview(self):
         if not self.worker or not self.worker.is_alive():
-            messagebox.showinfo("本地预览", "请先点击“开始录像”，再打开本地预览。")
+            messagebox.showinfo("本地预览", "请先点击“打开摄像头”。")
             return
         url = f"http://127.0.0.1:{self.preview_port}/"
         edge = Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
@@ -342,56 +352,105 @@ img{{display:block;width:100vw;height:100vh;object-fit:contain;background:#000}}
         else:
             webbrowser.open(url)
 
-    def start(self):
+    def open_camera(self):
         try:
             url = stream_url(self.address.get())
-            folder = Path(self.output_dir.get()).expanduser()
-            folder.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
-            messagebox.showerror("无法开始", str(exc))
+            messagebox.showerror("无法打开摄像头", str(exc))
             return
-        filename = datetime.now().strftime("ESP32Cam_%Y%m%d_%H%M%S.avi")
-        self.current_file = folder / filename
-        self.working_file = folder / (filename + ".recording")
         self.stop_event.clear()
         with self.frame_condition:
             self.preview_frames.clear()
             self.preview_interval = 1.0 / 10.0
             self.preview_epoch += 1
             self.frame_condition.notify_all()
+        self.camera_button.configure(state="disabled")
+        self.preview_button.configure(state="disabled")
         self.start_button.configure(state="disabled")
-        self.stop_button.configure(state="normal")
         self.status.set(f"正在连接 {url} ...")
-        self.worker = threading.Thread(target=self.record_worker, args=(url,), daemon=True)
+        self.worker = threading.Thread(target=self.capture_worker, args=(url,), daemon=True)
         self.worker.start()
         self.root.after(800, self.open_preview)
 
-    def stop(self):
-        self.stop_event.set()
+    def start_recording(self):
+        if not self.worker or not self.worker.is_alive():
+            messagebox.showinfo("开始录制", "请先打开摄像头。")
+            return
+        try:
+            folder = Path(self.output_dir.get()).expanduser()
+            folder.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            messagebox.showerror("无法开始录制", str(exc))
+            return
+        filename = datetime.now().strftime("ESP32Cam_%Y%m%d_%H%M%S.avi")
+        with self.record_lock:
+            if self.recording:
+                return
+            self.current_file = folder / filename
+            self.working_file = folder / (filename + ".recording")
+            self.writer = None
+            self.recording = True
+        self.start_button.configure(state="disabled")
+        self.stop_button.configure(state="normal")
+        self.status.set("正在录制，等待下一帧...")
+
+    def detach_recording(self):
+        with self.record_lock:
+            if not self.recording:
+                return None
+            self.recording = False
+            result = (self.writer, self.working_file, self.current_file)
+            self.writer = None
+            return result
+
+    def stop_recording(self):
+        recording = self.detach_recording()
+        if recording is None:
+            return
         self.stop_button.configure(state="disabled")
         self.status.set("正在停止并写入 AVI 索引，请稍候...")
-        response = self.current_response
-        if response is not None:
-            try:
-                response.close()
-            except Exception:
-                pass
+        self.finalizer = threading.Thread(
+            target=self.finalize_recording, args=(recording,), daemon=True
+        )
+        self.finalizer.start()
 
-    def record_worker(self, url):
-        writer = None
+    def finalize_recording(self, recording, disconnected_error=None):
+        writer, working_file, current_file = recording
+        error = disconnected_error
+        if writer is None:
+            error = error or RuntimeError("开始录制后未收到任何图像帧")
+        else:
+            try:
+                writer.close()
+                os.replace(working_file, current_file)
+            except Exception as exc:
+                error = exc
+        if error is None:
+            self.last_saved_file = current_file
+            self.root.after(0, self.recording_finished, current_file)
+        else:
+            self.root.after(0, self.recording_failed, str(error))
+
+    def capture_worker(self, url):
         error = None
+        width = None
+        height = None
+        capture_started = None
+        last_frame_time = None
+        paused_duration = 0.0
+        capture_frames = 0
         try:
             request = urllib.request.Request(url, headers={"User-Agent": "ESP32CamRecorder/1.0"})
             with urllib.request.urlopen(request, timeout=10) as response:
                 self.current_response = response
+                self.root.after(0, self.camera_connected)
                 buffer = bytearray()
                 last_update = time.monotonic()
                 while not self.stop_event.is_set():
-                    # read1 returns data from a single socket read instead of
-                    # waiting to fill a 16 KiB request. Small JPEG frames reach
-                    # the preview immediately and Wi-Fi jitter is left for the
-                    # existing four-second playback buffer to absorb.
-                    data = response.read1(65536)
+                    # Keep the read small. HTTPResponse may wait for the
+                    # requested amount, so a large read can turn low-bandwidth
+                    # camera data into multi-second bursts.
+                    data = response.read1(4096)
                     if not data:
                         raise ConnectionError("图传连接已断开")
                     buffer.extend(data)
@@ -408,18 +467,33 @@ img{{display:block;width:100vw;height:100vh;object-fit:contain;background:#000}}
                             break
                         frame = bytes(buffer[start:end + 2])
                         del buffer[:end + 2]
-                        if writer is None:
+                        frame_now = time.monotonic()
+                        if capture_started is None:
+                            capture_started = frame_now
+                        if last_frame_time is not None:
+                            gap = frame_now - last_frame_time
+                            if gap > SUSPEND_GAP_SECONDS:
+                                paused_duration += gap
+                        last_frame_time = frame_now
+                        capture_frames += 1
+                        elapsed = max(0.001, frame_now - capture_started - paused_duration)
+                        if width is None or height is None:
                             width, height = jpeg_dimensions(frame)
-                            writer = MjpegAviWriter(self.working_file, width, height)
-                        writer.add_frame(frame)
-                        # Network reads often contain several JPEGs at once, so
-                        # per-frame arrival timestamps are not a reliable clock.
-                        # Use the same cumulative average rate as the AVI writer;
-                        # this is why the saved video already plays smoothly.
-                        elapsed = writer.elapsed
+                        with self.record_lock:
+                            if self.recording:
+                                if self.writer is None:
+                                    self.writer = MjpegAviWriter(self.working_file, width, height)
+                                self.writer.add_frame(frame)
+                            if self.writer is None:
+                                recording_stats = None
+                            else:
+                                recording_stats = (
+                                    self.writer.frames,
+                                    self.writer.file.tell() / 1_048_576,
+                                )
                         with self.frame_condition:
-                            if elapsed >= 0.5 and writer.frames >= 4:
-                                measured_interval = elapsed / writer.frames
+                            if elapsed >= 0.5 and capture_frames >= 4:
+                                measured_interval = elapsed / capture_frames
                                 if 1.0 / 60.0 <= measured_interval <= 1.0:
                                     self.preview_interval = measured_interval
                             if self.preview_client_active:
@@ -427,12 +501,17 @@ img{{display:block;width:100vw;height:100vh;object-fit:contain;background:#000}}
                                 self.frame_condition.notify_all()
                         now = time.monotonic()
                         if now - last_update >= 0.5:
-                            fps = writer.frames / writer.elapsed
-                            size_mb = writer.file.tell() / 1_048_576
-                            message = (
-                                f"录像中：{writer.width}x{writer.height} | {fps:.1f} fps | "
-                                f"{writer.frames} 帧 | {size_mb:.1f} MB"
-                            )
+                            fps = capture_frames / elapsed
+                            if recording_stats is not None:
+                                record_frames, size_mb = recording_stats
+                                message = (
+                                    f"录制中：{width}x{height} | {fps:.1f} fps | "
+                                    f"{record_frames} 帧 | {size_mb:.1f} MB"
+                                )
+                            else:
+                                message = f"摄像头已打开：{width}x{height} | {fps:.1f} fps"
+                                if self.last_saved_file is not None:
+                                    message += f" | 上次保存：{self.last_saved_file.name}"
                             self.root.after(0, self.status.set, message)
                             last_update = now
         except Exception as exc:
@@ -440,44 +519,70 @@ img{{display:block;width:100vw;height:100vh;object-fit:contain;background:#000}}
                 error = exc
         finally:
             self.current_response = None
-            if writer is None:
-                if error is None:
-                    error = RuntimeError("未收到任何图像帧")
-            else:
-                try:
-                    writer.close()
-                    writer = None
-                    os.replace(self.working_file, self.current_file)
-                except Exception as exc:
-                    error = exc
-            if error is None:
-                self.root.after(0, self.finish_ok)
-            else:
-                self.root.after(0, self.finish_error, str(error))
+            recording = self.detach_recording()
+            if recording is not None:
+                self.finalize_recording(recording)
+            self.root.after(0, self.camera_finished, error)
 
-    def finish_ok(self):
-        self.start_button.configure(state="normal")
+    def recording_finished(self, current_file):
+        if self.worker is not None and self.worker.is_alive():
+            self.start_button.configure(state="normal")
         self.stop_button.configure(state="disabled")
-        self.status.set(f"已保存：{self.current_file}")
+        self.status.set(f"已保存：{current_file}；摄像头预览继续运行")
 
-    def finish_error(self, error):
-        self.start_button.configure(state="normal")
+    def recording_failed(self, error):
+        if self.worker is not None and self.worker.is_alive():
+            self.start_button.configure(state="normal")
         self.stop_button.configure(state="disabled")
         self.status.set(f"录像停止：{error}")
-        messagebox.showerror("录像停止", error)
+        if not self.closing:
+            messagebox.showerror("录像停止", error)
+
+    def camera_finished(self, error):
+        self.camera_button.configure(state="normal")
+        self.preview_button.configure(state="disabled")
+        self.start_button.configure(state="disabled")
+        self.stop_button.configure(state="disabled")
+        if self.closing:
+            return
+        if error is None:
+            self.status.set("摄像头已关闭")
+        else:
+            self.status.set(f"摄像头连接中断：{error}")
+            messagebox.showerror("摄像头连接中断", str(error))
+
+    def camera_connected(self):
+        if self.worker is None or not self.worker.is_alive():
+            return
+        self.preview_button.configure(state="normal")
+        self.start_button.configure(state="normal")
 
     def on_close(self):
         if self.close_requested:
             return
         self.close_requested = True
         self.closing = True
-        self.stop()
+        recording = self.detach_recording()
+        if recording is not None:
+            self.finalizer = threading.Thread(
+                target=self.finalize_recording, args=(recording,), daemon=True
+            )
+            self.finalizer.start()
+        self.stop_event.set()
+        response = self.current_response
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
         with self.frame_condition:
             self.frame_condition.notify_all()
         self.wait_for_close()
 
     def wait_for_close(self):
-        if self.worker is not None and self.worker.is_alive():
+        worker_alive = self.worker is not None and self.worker.is_alive()
+        finalizer_alive = self.finalizer is not None and self.finalizer.is_alive()
+        if worker_alive or finalizer_alive:
             self.status.set("正在完成录像文件，请勿强制关闭...")
             self.root.after(100, self.wait_for_close)
             return
