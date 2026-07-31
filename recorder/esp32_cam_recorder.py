@@ -16,6 +16,7 @@ from tkinter import filedialog, messagebox, ttk
 
 MAX_AVI_BYTES = 3_800_000_000
 PREVIEW_BUFFER_SECONDS = 4.0
+SUSPEND_GAP_SECONDS = 2.5
 
 
 def _chunk(tag, payload):
@@ -64,6 +65,8 @@ class MjpegAviWriter:
         self.max_frame = 0
         self.index = []
         self.started = time.monotonic()
+        self.paused_duration = 0.0
+        self.last_frame_time = None
         self.file = self.path.open("w+b")
         placeholder = self._header(0, 1.0, 0, 0)
         self.header_size = len(placeholder)
@@ -99,6 +102,12 @@ class MjpegAviWriter:
         )
 
     def add_frame(self, jpeg):
+        now = time.monotonic()
+        if self.last_frame_time is not None:
+            gap = now - self.last_frame_time
+            if gap > SUSPEND_GAP_SECONDS:
+                self.paused_duration += gap
+        self.last_frame_time = now
         if self.file.tell() + len(jpeg) + 32 >= MAX_AVI_BYTES:
             raise RuntimeError("录像已接近 AVI 4GB 上限，已自动停止")
         chunk_pos = self.file.tell()
@@ -115,7 +124,8 @@ class MjpegAviWriter:
 
     @property
     def elapsed(self):
-        return max(0.001, time.monotonic() - self.started)
+        end = self.last_frame_time if self.last_frame_time is not None else time.monotonic()
+        return max(0.001, end - self.started - self.paused_duration)
 
     def close(self):
         if self.file.closed:
@@ -163,6 +173,8 @@ class RecorderApp:
         # The user prefers added latency over any preview frame dropping.
         self.preview_frames = deque()
         self.preview_interval = 1.0 / 10.0
+        self.preview_epoch = 0
+        self.preview_client_active = False
         self.frame_condition = threading.Condition()
         self.output_dir = tk.StringVar(value=str(Path.home() / "Videos"))
         self.address = tk.StringVar(value="192.168.1.100")
@@ -224,6 +236,15 @@ img{{display:block;width:100vw;height:100vh;object-fit:contain;background:#000}}
                 if self.path != "/stream":
                     self.send_error(404)
                     return
+                with app.frame_condition:
+                    if app.preview_client_active:
+                        self.send_error(409, "A preview window is already connected")
+                        return
+                    app.preview_client_active = True
+                    app.preview_frames.clear()
+                    app.preview_epoch += 1
+                    epoch = app.preview_epoch
+                    app.frame_condition.notify_all()
                 self.send_response(200)
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
@@ -233,23 +254,39 @@ img{{display:block;width:100vw;height:100vh;object-fit:contain;background:#000}}
                 try:
                     while not app.closing:
                         with app.frame_condition:
+                            if epoch != app.preview_epoch:
+                                epoch = app.preview_epoch
+                                playback_started = False
+                                next_send = time.monotonic()
                             target_frames = max(
                                 8,
                                 min(120, round(PREVIEW_BUFFER_SECONDS / app.preview_interval)),
                             )
                             if not playback_started:
                                 app.frame_condition.wait_for(
-                                    lambda: len(app.preview_frames) >= target_frames or app.closing,
-                                    timeout=2.0,
+                                    lambda: (
+                                        len(app.preview_frames) >= target_frames
+                                        or app.closing
+                                        or epoch != app.preview_epoch
+                                    ),
+                                    timeout=PREVIEW_BUFFER_SECONDS + 1.0,
                                 )
+                                if epoch != app.preview_epoch:
+                                    continue
                                 if app.preview_frames:
                                     playback_started = True
                                     next_send = time.monotonic()
                             else:
                                 app.frame_condition.wait_for(
-                                    lambda: bool(app.preview_frames) or app.closing,
+                                    lambda: (
+                                        bool(app.preview_frames)
+                                        or app.closing
+                                        or epoch != app.preview_epoch
+                                    ),
                                     timeout=1.0,
                                 )
+                                if epoch != app.preview_epoch:
+                                    continue
                             if app.closing:
                                 break
                             if not app.preview_frames:
@@ -270,6 +307,12 @@ img{{display:block;width:100vw;height:100vh;object-fit:contain;background:#000}}
                         next_send += interval
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                     pass
+                finally:
+                    with app.frame_condition:
+                        app.preview_client_active = False
+                        app.preview_frames.clear()
+                        app.preview_epoch += 1
+                        app.frame_condition.notify_all()
 
         self.preview_server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), PreviewHandler)
         self.preview_server.daemon_threads = True
@@ -314,6 +357,8 @@ img{{display:block;width:100vw;height:100vh;object-fit:contain;background:#000}}
         with self.frame_condition:
             self.preview_frames.clear()
             self.preview_interval = 1.0 / 10.0
+            self.preview_epoch += 1
+            self.frame_condition.notify_all()
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
         self.status.set(f"正在连接 {url} ...")
@@ -341,10 +386,19 @@ img{{display:block;width:100vw;height:100vh;object-fit:contain;background:#000}}
                 self.current_response = response
                 buffer = bytearray()
                 last_update = time.monotonic()
+                last_network_activity = last_update
                 while not self.stop_event.is_set():
                     data = response.read(16384)
                     if not data:
                         raise ConnectionError("图传连接已断开")
+                    read_now = time.monotonic()
+                    if read_now - last_network_activity > SUSPEND_GAP_SECONDS:
+                        with self.frame_condition:
+                            self.preview_frames.clear()
+                            self.preview_interval = 1.0 / 10.0
+                            self.preview_epoch += 1
+                            self.frame_condition.notify_all()
+                    last_network_activity = read_now
                     buffer.extend(data)
                     while True:
                         start = buffer.find(b"\xff\xd8")
@@ -373,8 +427,9 @@ img{{display:block;width:100vw;height:100vh;object-fit:contain;background:#000}}
                                 measured_interval = elapsed / writer.frames
                                 if 1.0 / 60.0 <= measured_interval <= 1.0:
                                     self.preview_interval = measured_interval
-                            self.preview_frames.append(frame)
-                            self.frame_condition.notify_all()
+                            if self.preview_client_active:
+                                self.preview_frames.append(frame)
+                                self.frame_condition.notify_all()
                         now = time.monotonic()
                         if now - last_update >= 0.5:
                             fps = writer.frames / writer.elapsed
