@@ -138,6 +138,21 @@ void setup() {
   // s->set_vflip(s, 1);
 #endif
 
+  if (s && s->id.PID == GC2145_PID) {
+    // GC2145's stock AEC table allows the darkest exposure level to grow from
+    // 0x01e6 to 0x0462 lines. That more than doubles exposure time and makes
+    // the source rate fall from roughly 11 fps to 4-5 fps as lighting changes.
+    // Cap level 4 to the same 0x01e6 value used by levels 1-3. In very dark
+    // scenes this favors stable motion over maximum brightness.
+    int aec_result = 0;
+    aec_result |= s->set_reg(s, 0xfe, 0xff, 0x01);
+    aec_result |= s->set_reg(s, 0x2d, 0xff, 0x01);
+    aec_result |= s->set_reg(s, 0x2e, 0xff, 0xe6);
+    aec_result |= s->set_reg(s, 0xfe, 0xff, 0x00);
+    Serial.printf("GC2145 stable-FPS exposure cap: %s\n",
+                  aec_result == 0 ? "enabled" : "failed");
+  }
+
   WiFi.mode(WIFI_STA);
   WiFi.disconnect(true);
   delay(200);

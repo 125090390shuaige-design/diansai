@@ -19,7 +19,7 @@ https://github.com/125090390shuaige-design/diansai.git
 - 使用仓库中的 CameraWebServer_STA_0x0.bin。
 - 开发板连接 2.4 GHz 手机热点：名称 nihao，密码 welcometohere。
 - Windows 运行“启动录像工具.bat”。
-- 预览为 VGA 640×480、JPEG 质量 75。
+- 预览为 HVGA 480×320、JPEG 质量 70，并限制 GC2145 暗处最长曝光档以优先保证帧率。
 - 电脑端缓存约 4 秒，不主动抽帧，按录像平均帧率匀速预览。
 - 录像保存为 MJPEG AVI。
 
@@ -55,7 +55,7 @@ https://github.com/125090390shuaige-design/diansai.git
 
 5. 检查固件
 - 计算 CameraWebServer_STA_0x0.bin 的 SHA-256，预期为：
-  F9BBA5B1959067AF9D0155D1B734396F730B7923269EE8DA63AB9E276A64DC59
+  68A904328DE688885FFDFF6ED03BC81614AF2FEF44C1A608C4367244D58736E9
 - 如果开发板已经烧录该版本，不要重复烧录。
 - 如果需要烧录，打开根目录的 flash_download_tool_3.9.7.exe，并参考根目录的“烧录配置说明.txt”。启动后检查：
   - ChipType：ESP32-S3

@@ -12,6 +12,7 @@
 - 图传协议：HTTP MJPEG
 - 编码器：Espressif `esp_new_jpeg` 1.0.0
 - 优化：ESP32-S3 SIMD、双核 JPEG、DRAM 分块、双帧缓冲、关闭 Wi-Fi 休眠
+- 稳定帧率：限制 GC2145 暗处最长曝光档，优先保证运动流畅度
 - 电脑预览：约 4 秒缓存、不抽帧，按录像平均帧率匀速播放
 - Flash SPI：DIO 80 MHz（最终BIN头已写入80 MHz）
 
