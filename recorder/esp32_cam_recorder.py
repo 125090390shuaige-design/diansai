@@ -386,19 +386,14 @@ img{{display:block;width:100vw;height:100vh;object-fit:contain;background:#000}}
                 self.current_response = response
                 buffer = bytearray()
                 last_update = time.monotonic()
-                last_network_activity = last_update
                 while not self.stop_event.is_set():
-                    data = response.read(16384)
+                    # read1 returns data from a single socket read instead of
+                    # waiting to fill a 16 KiB request. Small JPEG frames reach
+                    # the preview immediately and Wi-Fi jitter is left for the
+                    # existing four-second playback buffer to absorb.
+                    data = response.read1(65536)
                     if not data:
                         raise ConnectionError("图传连接已断开")
-                    read_now = time.monotonic()
-                    if read_now - last_network_activity > SUSPEND_GAP_SECONDS:
-                        with self.frame_condition:
-                            self.preview_frames.clear()
-                            self.preview_interval = 1.0 / 10.0
-                            self.preview_epoch += 1
-                            self.frame_condition.notify_all()
-                    last_network_activity = read_now
                     buffer.extend(data)
                     while True:
                         start = buffer.find(b"\xff\xd8")

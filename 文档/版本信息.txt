@@ -6,8 +6,8 @@
 
 摄像头：GC2145（无原生 JPEG）
 采集格式：YUV422
-默认分辨率：HVGA 480x320
-JPEG：Espressif esp_new_jpeg 1.0.0，质量 70，YUV420 色度采样
+默认分辨率：QVGA 320x240
+JPEG：Espressif esp_new_jpeg 1.0.0，质量 80，YUV420 色度采样
 性能优化：ESP32-S3 SIMD、双核编码、DRAM 分块编码、双帧缓冲、只取最新帧、关闭 Wi-Fi 休眠
 稳定帧率：GC2145 最慢自动曝光档限制为 0x01e6，避免暗处从约 11fps 降至 4-5fps
 传输协议：标准 HTTP MJPEG，兼容浏览器和“电脑录像工具”
@@ -19,6 +19,6 @@ Flash：8MB / DIO 80MHz
 PSRAM：OPI PSRAM
 分区：Huge APP，自定义 partitions.csv
 烧录地址：0x0（单文件已合并 bootloader、partition table、boot_app0 和 app）
-SHA-256：68A904328DE688885FFDFF6ED03BC81614AF2FEF44C1A608C4367244D58736E9
+SHA-256：29CEAC5CDD0E20CC4E3B7AEEAC6C5020A24DD35029A541041E9C46593DD594FF
 
 注意：本版本修改了固件，必须重新烧录才会生效。
